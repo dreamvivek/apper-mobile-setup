@@ -323,7 +323,7 @@ async function showMenu() {
 
 async function main() {
   console.log('\n========================================================');
-  console.log('📱 apper.io - Mobile Setup');
+  console.log('📱 Apper - Mobile Setup (https://apper.io)');
   console.log('========================================================\n');
 
   console.log('⚠️  REQUIRED SOFTWARE & DOWNLOAD LINKS:');
