@@ -288,11 +288,7 @@ function handleReset() {
 
 // Interactive CLI Loop
 async function showMenu() {
-  console.log('\n========================================================');
-  console.log('📱 Apper - Mobile Apps');
-  console.log('========================================================');
-
-  console.log('\n 1) Setup Android');
+  console.log(' 1) Setup Android');
   console.log(' 2) Setup iOS');
   console.log(' 3) RESET');
   console.log(' 0) Exit\n');
@@ -321,17 +317,18 @@ async function showMenu() {
       console.log('❌ Invalid option. Please enter a number between 0 and 3.');
   }
 
+  console.log('\n--------------------------------------------------------\n');
   await showMenu();
 }
 
 async function main() {
   console.log('\n========================================================');
-  console.log('📱 Apper - Native Mobile Setup');
+  console.log('📱 apper.io - Mobile Setup');
   console.log('========================================================\n');
 
-  console.log('⚠️  IMPORTANT REQUIREMENTS & WARNING:');
-  console.log('  • Ensure you have the latest Android Studio & JDK installed.');
-  console.log('  • Ensure Xcode is installed (if targeting iOS on macOS).\n');
+  console.log('⚠️  REQUIRED SOFTWARE & DOWNLOAD LINKS:');
+  console.log('  • Android Studio & JDK: https://developer.android.com/studio');
+  console.log('  • Xcode (macOS only):   https://developer.apple.com/xcode/\n');
 
   await showMenu();
 }
