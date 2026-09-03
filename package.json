@@ -1,12 +1,14 @@
 {
-  "name": "mobile-setup",
+  "name": "@apper/mobile-setup",
   "version": "1.0.0",
-  "description": "",
-  "license": "ISC",
-  "author": "Vivek Muthal",
-  "type": "commonjs",
-  "main": "index.js",
+  "description": "Interactive mobile patch setup for Apper apps",
+  "main": "patch-mobile.cjs",
+  "bin": {
+    "apper-mobile": "./patch-mobile.cjs"
+  },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  }
+    "start": "node patch-mobile.cjs"
+  },  
+  "type": "commonjs",
+  "author": "Vivek Muthal",
 }
