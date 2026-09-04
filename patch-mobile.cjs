@@ -150,6 +150,9 @@ function prepareCapacitorConfig() {
     appId: appId,
     appName: appName,
     webDir: webDir,
+    ios: {
+      contentInset: "always"
+    },
     bundledWebRuntime: false,
     plugins: {
       CapacitorHttp: {
