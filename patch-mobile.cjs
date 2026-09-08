@@ -95,7 +95,7 @@ function ensureAndroidPermissions() {
   }
 }
 
-// Inject zero-config Push Notification Listener into entry HTML
+// Inject zero-config Push Notification Listener & FCM Token Sync into entry HTML
 function injectPushListener() {
   const possibleHtmlPaths = [
     path.join(process.cwd(), 'index.html'),
@@ -112,22 +112,40 @@ function injectPushListener() {
 
   const pushScript = `
     ${injectionMarker}
-    <script>
+    <script type="module">
+      import apper from 'https://cdn.apper.io/actions/apper-actions.js';
+
       (function() {
         if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.PushNotifications) {
           const Push = window.Capacitor.Plugins.PushNotifications;
           
+          // 1. Request Push Permissions on App Launch
           Push.requestPermissions().then(function(result) {
             if (result.receive === 'granted') {
               Push.register();
             }
           });
 
-          Push.addListener('registration', function(token) {
+          // 2. On FCM Registration: Store token & upload to Apper User Profile
+          Push.addListener('registration', async function(token) {
             window.ApperDeviceToken = token.value;
-            window.dispatchEvent(new CustomEvent('apperDeviceTokenReady', { detail: token.value }));
+
+            try {
+              // Retrieve active user email or ID from Apper SDK or local storage
+              const currentUser = await apper.getUser();
+              if (currentUser && currentUser.email) {
+                await apper.updateUser({
+                  email: currentUser.email,
+                  fcmToken: token.value
+                });
+                console.log('✅ FCM token synced with Apper user profile');
+              }
+            } catch (err) {
+              console.warn('⚠️ Could not auto-sync FCM token to Apper:', err.message);
+            }
           });
 
+          // 3. Handle Notification Tap (Deep Linking to specific records/pages)
           Push.addListener('pushNotificationActionPerformed', function(action) {
             var data = action.notification.data;
             if (data && data.url) {
@@ -143,7 +161,7 @@ function injectPushListener() {
   if (htmlContent.includes('</head>')) {
     htmlContent = htmlContent.replace('</head>', `${pushScript}\n</head>`);
     fs.writeFileSync(htmlPath, htmlContent);
-    console.log(`✅ Injected push notification handler into ${path.relative(process.cwd(), htmlPath)}`);
+    console.log(`✅ Injected FCM token auto-sync listener into ${path.relative(process.cwd(), htmlPath)}`);
   }
 }
 
