@@ -95,6 +95,59 @@ function ensureAndroidPermissions() {
   }
 }
 
+// Inject zero-config Push Notification Listener into HTML
+function injectPushListener() {
+  const possibleHtmlPaths = [
+    path.join(process.cwd(), 'index.html'),
+    path.join(process.cwd(), 'public', 'index.html')
+  ];
+
+  const htmlPath = possibleHtmlPaths.find(p => fs.existsSync(p));
+  if (!htmlPath) return;
+
+  let htmlContent = fs.readFileSync(htmlPath, 'utf-8');
+  const injectionMarker = '<!-- APPER_PUSH_LISTENER_INJECTED -->';
+
+  if (htmlContent.includes(injectionMarker)) return;
+
+  const pushScript = `
+    ${injectionMarker}
+    <script>
+      (function() {
+        if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.PushNotifications) {
+          const Push = window.Capacitor.Plugins.PushNotifications;
+          
+          // Request permissions & register on startup
+          Push.requestPermissions().then(result => {
+            if (result.receive === 'granted') {
+              Push.register();
+            }
+          });
+
+          // Handle registration token
+          Push.addListener('registration', token => {
+            window.ApperDeviceToken = token.value;
+            window.dispatchEvent(new CustomEvent('apperDeviceTokenReady', { detail: token.value }));
+          });
+
+          // Handle tap action (Deep linking without user code change)
+          Push.addListener('pushNotificationActionPerformed', action => {
+            const data = action.notification.data;
+            if (data && data.url) {
+              window.location.href = data.url;
+            }
+            window.dispatchEvent(new CustomEvent('apperNotificationTap', { detail: data }));
+          });
+        }
+      })();
+    </script>
+  `;
+
+  htmlContent = htmlContent.replace('</head>', `${pushScript}\n</head>`);
+  fs.writeFileSync(htmlPath, htmlContent);
+  console.log(`✅ Injected zero-config push notification handler into ${path.relative(process.cwd(), htmlPath)}`);
+}
+
 // Auto-configure FCM for Android if google-services.json exists
 function configureAndroidPushNotifications() {
   const rootGoogleServices = ['google-services.json', 'assets/google-services.json']
@@ -169,7 +222,6 @@ function prepareCapacitorConfig() {
   const appName = formatAppName(rawName);
   const appId = formatAppId(rawName);
 
-  // 1. Dependencies including Push Notifications plugin
   pkg.dependencies = pkg.dependencies || {};
   pkg.dependencies['@capacitor/core'] = '^8.5.1';
   pkg.dependencies['@capacitor/push-notifications'] = '^8.0.0';
@@ -182,7 +234,6 @@ function prepareCapacitorConfig() {
   fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2));
   console.log(`✅ Updated package.json (App Name: "${appName}", App ID: "${appId}")`);
 
-  // 2. .gitignore updates
   const gitignorePath = path.join(process.cwd(), '.gitignore');
   const nativeEntries = ['/android', '/ios', 'capacitor.config.json'];
 
@@ -201,32 +252,22 @@ function prepareCapacitorConfig() {
     console.log(`✅ Updated .gitignore`);
   }
 
-  // 3. Create capacitor.config.json
-  let webDir = 'dist';
-  if (fs.existsSync('build')) webDir = 'build';
-  else if (fs.existsSync('out')) webDir = 'out';
-
   const capConfig = {
     appId: appId,
     appName: appName,
-    webDir: webDir,
-    ios: {
-      contentInset: "always"
-    },
+    webDir: fs.existsSync('build') ? 'build' : fs.existsSync('out') ? 'out' : 'dist',
+    ios: { contentInset: "always" },
     bundledWebRuntime: false,
     plugins: {
-      CapacitorHttp: {
-        enabled: true
-      },
-      PushNotifications: {
-        presentationOptions: ["badge", "sound", "alert"]
-      }
+      CapacitorHttp: { enabled: true },
+      PushNotifications: { presentationOptions: ["badge", "sound", "alert"] }
     }
   };
   fs.writeFileSync('capacitor.config.json', JSON.stringify(capConfig, null, 2));
-  console.log(`✅ Created capacitor.config.json with Native HTTP & Push Notifications enabled`);
 
-  // 4. Install dependencies & build web package
+  // Inject listener into HTML before build
+  injectPushListener();
+
   console.log('\n📦 Installing NPM packages...');
   try {
     execSync('npm install', { stdio: 'inherit' });
@@ -240,18 +281,16 @@ function prepareCapacitorConfig() {
     execSync('npm run build', { stdio: 'inherit' });
     console.log(`✅ Web build succeeded!`);
   } catch (e) {
-    console.error('❌ Web build failed. Please resolve build errors first.');
+    console.error('❌ Web build failed.');
     return false;
   }
 
   return true;
 }
 
-// Action: Setup Android
 function setupAndroid() {
   if (!fs.existsSync('capacitor.config.json')) {
-    const ok = prepareCapacitorConfig();
-    if (!ok) return;
+    if (!prepareCapacitorConfig()) return;
   }
 
   if (!fs.existsSync('android')) {
@@ -277,7 +316,6 @@ function setupAndroid() {
     return;
   }
 
-  console.log('\n📂 Launching Android Studio...');
   try {
     execSync('npx cap open android', { stdio: 'inherit' });
   } catch (e) {
@@ -285,11 +323,9 @@ function setupAndroid() {
   }
 }
 
-// Action: Setup iOS
 function setupIOS() {
   if (!fs.existsSync('capacitor.config.json')) {
-    const ok = prepareCapacitorConfig();
-    if (!ok) return;
+    if (!prepareCapacitorConfig()) return;
   }
 
   if (!fs.existsSync('ios')) {
@@ -313,7 +349,6 @@ function setupIOS() {
     return;
   }
 
-  console.log('\n📂 Launching Xcode...');
   try {
     execSync('npx cap open ios', { stdio: 'inherit' });
   } catch (e) {
@@ -321,85 +356,33 @@ function setupIOS() {
   }
 }
 
-// Action: RESET
 function handleReset() {
   console.log('\n🧹 Clearing all generated mobile configurations and platforms...');
-
-  const targets = ['android', 'ios', 'capacitor.config.json'];
-  targets.forEach(item => {
+  ['android', 'ios', 'capacitor.config.json'].forEach(item => {
     const itemPath = path.join(process.cwd(), item);
     if (fs.existsSync(itemPath)) {
       fs.rmSync(itemPath, { recursive: true, force: true });
-      console.log(`  🗑️ Removed ${item}`);
     }
   });
-
-  // Revert package.json dependency injections
-  const pkgPath = path.join(process.cwd(), 'package.json');
-  if (fs.existsSync(pkgPath)) {
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
-    
-    if (pkg.dependencies) {
-      delete pkg.dependencies['@capacitor/core'];
-      delete pkg.dependencies['@capacitor/push-notifications'];
-    }
-    if (pkg.devDependencies) {
-      delete pkg.devDependencies['@capacitor/cli'];
-      delete pkg.devDependencies['@capacitor/android'];
-      delete pkg.devDependencies['@capacitor/ios'];
-    }
-    
-    fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2));
-    console.log('  🗑️ Removed Capacitor entries from package.json');
-  }
-
-  console.log('\n✨ Reset complete! Mobile configurations have been removed.');
+  console.log('✨ Reset complete!');
 }
 
-// Interactive CLI Loop
 async function showMenu() {
-  console.log(' 1) Setup Android');
-  console.log(' 2) Setup iOS');
-  console.log(' 3) RESET');
-  console.log(' 0) Exit\n');
-
+  console.log(' 1) Setup Android\n 2) Setup iOS\n 3) RESET\n 0) Exit\n');
   const answer = await askQuestion('👉 Select an option (0-3): ');
 
-  switch (answer) {
-    case '1':
-      setupAndroid();
-      break;
-    case '2':
-      setupIOS();
-      break;
-    case '3':
-      const confirm = await askQuestion('⚠️ Are you sure you want to delete all mobile configs & native platform folders? (y/N): ');
-      if (confirm.toLowerCase() === 'y') {
-        handleReset();
-      } else {
-        console.log('Action cancelled.');
-      }
-      break;
-    case '0':
-      console.log('\n👋 Exiting Mobile Setup Manager.\n');
-      process.exit(0);
-    default:
-      console.log('❌ Invalid option. Please enter a number between 0 and 3.');
-  }
+  if (answer === '1') setupAndroid();
+  else if (answer === '2') setupIOS();
+  else if (answer === '3') {
+    const confirm = await askQuestion('⚠️ Delete configs? (y/N): ');
+    if (confirm.toLowerCase() === 'y') handleReset();
+  } else if (answer === '0') process.exit(0);
 
-  console.log('\n--------------------------------------------------------\n');
   await showMenu();
 }
 
 async function main() {
-  console.log('\n========================================================');
-  console.log('📱 Apper - Mobile Setup (https://apper.io)');
-  console.log('========================================================\n');
-
-  console.log('⚠️  REQUIRED SOFTWARE & DOWNLOAD LINKS:');
-  console.log('  • Android Studio & JDK: https://developer.android.com/studio');
-  console.log('  • Xcode (macOS only):   https://developer.apple.com/xcode/\n');
-
+  console.log('\n📱 Apper - Mobile Setup Manager\n');
   await showMenu();
 }
 
