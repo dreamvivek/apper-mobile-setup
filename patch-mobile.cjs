@@ -91,11 +91,70 @@ function ensureAndroidPermissions() {
 
   if (addedCount > 0) {
     fs.writeFileSync(manifestPath, content);
-    console.log(`✅ Injected ${addedCount} missing permissions into AndroidManifest.xml`);
+    console.log(`✅ Injected missing permissions into AndroidManifest.xml`);
   }
 }
 
-// Shared Core Configuration setup (without touching source code)
+// Auto-configure FCM for Android if google-services.json exists
+function configureAndroidPushNotifications() {
+  const rootGoogleServices = ['google-services.json', 'assets/google-services.json']
+    .map(p => path.join(process.cwd(), p))
+    .find(p => fs.existsSync(p));
+
+  if (!rootGoogleServices) {
+    console.log('💡 Push Notifications: No google-services.json found in root or assets/. Skipping FCM auto-config.');
+    return;
+  }
+
+  const targetPath = path.join(process.cwd(), 'android', 'app', 'google-services.json');
+  fs.copyFileSync(rootGoogleServices, targetPath);
+  console.log('✅ Copied google-services.json to android/app/');
+
+  // Patch root build.gradle for Google Services Plugin
+  const buildGradlePath = path.join(process.cwd(), 'android', 'build.gradle');
+  if (fs.existsSync(buildGradlePath)) {
+    let gradleContent = fs.readFileSync(buildGradlePath, 'utf-8');
+    if (!gradleContent.includes('com.google.gms:google-services')) {
+      gradleContent = gradleContent.replace(
+        /dependencies\s*\{/,
+        "dependencies {\n        classpath 'com.google.gms:google-services:4.4.0'"
+      );
+      fs.writeFileSync(buildGradlePath, gradleContent);
+      console.log('✅ Configured google-services classpath in android/build.gradle');
+    }
+  }
+
+  // Patch app/build.gradle
+  const appBuildGradlePath = path.join(process.cwd(), 'android', 'app', 'build.gradle');
+  if (fs.existsSync(appBuildGradlePath)) {
+    let appGradleContent = fs.readFileSync(appBuildGradlePath, 'utf-8');
+    if (!appGradleContent.includes("apply plugin: 'com.google.gms.google-services'")) {
+      appGradleContent += "\napply plugin: 'com.google.gms.google-services'\n";
+      fs.writeFileSync(appBuildGradlePath, appGradleContent);
+      console.log('✅ Applied google-services plugin in android/app/build.gradle');
+    }
+  }
+}
+
+// Auto-configure APNs/FCM for iOS if GoogleService-Info.plist exists
+function configureIOSPushNotifications() {
+  const rootPlist = ['GoogleService-Info.plist', 'assets/GoogleService-Info.plist']
+    .map(p => path.join(process.cwd(), p))
+    .find(p => fs.existsSync(p));
+
+  if (!rootPlist) {
+    console.log('💡 Push Notifications: No GoogleService-Info.plist found in root or assets/. Skipping iOS push auto-config.');
+    return;
+  }
+
+  const targetPath = path.join(process.cwd(), 'ios', 'App', 'App', 'GoogleService-Info.plist');
+  if (fs.existsSync(path.dirname(targetPath))) {
+    fs.copyFileSync(rootPlist, targetPath);
+    console.log('✅ Copied GoogleService-Info.plist to ios/App/App/');
+  }
+}
+
+// Shared Core Configuration setup
 function prepareCapacitorConfig() {
   console.log('\n⚙️ Configuring Capacitor dependencies...');
 
@@ -110,9 +169,10 @@ function prepareCapacitorConfig() {
   const appName = formatAppName(rawName);
   const appId = formatAppId(rawName);
 
-  // 1. Dependencies
+  // 1. Dependencies including Push Notifications plugin
   pkg.dependencies = pkg.dependencies || {};
   pkg.dependencies['@capacitor/core'] = '^8.5.1';
+  pkg.dependencies['@capacitor/push-notifications'] = '^8.0.0';
 
   pkg.devDependencies = pkg.devDependencies || {};
   pkg.devDependencies['@capacitor/cli'] = '^8.5.1';
@@ -141,7 +201,7 @@ function prepareCapacitorConfig() {
     console.log(`✅ Updated .gitignore`);
   }
 
-  // 3. Create capacitor.config.json with Native HTTP enabled
+  // 3. Create capacitor.config.json
   let webDir = 'dist';
   if (fs.existsSync('build')) webDir = 'build';
   else if (fs.existsSync('out')) webDir = 'out';
@@ -157,11 +217,14 @@ function prepareCapacitorConfig() {
     plugins: {
       CapacitorHttp: {
         enabled: true
+      },
+      PushNotifications: {
+        presentationOptions: ["badge", "sound", "alert"]
       }
     }
   };
   fs.writeFileSync('capacitor.config.json', JSON.stringify(capConfig, null, 2));
-  console.log(`✅ Created capacitor.config.json with Native HTTP enabled`);
+  console.log(`✅ Created capacitor.config.json with Native HTTP & Push Notifications enabled`);
 
   // 4. Install dependencies & build web package
   console.log('\n📦 Installing NPM packages...');
@@ -202,6 +265,7 @@ function setupAndroid() {
   }
 
   ensureAndroidSdkLocation();
+  configureAndroidPushNotifications();
   
   console.log('\n🔄 Syncing web assets into Android...');
   try {
@@ -237,6 +301,8 @@ function setupIOS() {
       return;
     }
   }
+
+  configureIOSPushNotifications();
 
   console.log('\n🔄 Syncing web assets into iOS...');
   try {
@@ -275,6 +341,7 @@ function handleReset() {
     
     if (pkg.dependencies) {
       delete pkg.dependencies['@capacitor/core'];
+      delete pkg.dependencies['@capacitor/push-notifications'];
     }
     if (pkg.devDependencies) {
       delete pkg.devDependencies['@capacitor/cli'];
