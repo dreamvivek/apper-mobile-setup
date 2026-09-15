@@ -143,6 +143,57 @@ function cleanupLegacyPushArtifacts() {
   }
 }
 
+// Ensure edge-to-edge inset support on projects configured by an earlier run
+function ensureEdgeToEdgeSupport() {
+  const pluginName = '@capawesome/capacitor-android-edge-to-edge-support';
+  let installed = false;
+
+  const pkgPath = path.join(process.cwd(), 'package.json');
+  if (fs.existsSync(pkgPath)) {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+    pkg.dependencies = pkg.dependencies || {};
+    if (!pkg.dependencies[pluginName]) {
+      pkg.dependencies[pluginName] = '^8.0.8';
+      fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2));
+      installed = true;
+    }
+  }
+
+  const capConfigPath = path.join(process.cwd(), 'capacitor.config.json');
+  if (fs.existsSync(capConfigPath)) {
+    try {
+      const capConfig = JSON.parse(fs.readFileSync(capConfigPath, 'utf-8'));
+      capConfig.plugins = capConfig.plugins || {};
+      let changed = false;
+
+      if (!capConfig.plugins.EdgeToEdge) {
+        capConfig.plugins.EdgeToEdge = { backgroundColor: '#ffffff' };
+        changed = true;
+      }
+      if (!capConfig.plugins.SystemBars || capConfig.plugins.SystemBars.insetsHandling !== 'disable') {
+        capConfig.plugins.SystemBars = Object.assign({}, capConfig.plugins.SystemBars, { insetsHandling: 'disable' });
+        changed = true;
+      }
+
+      if (changed) {
+        fs.writeFileSync(capConfigPath, JSON.stringify(capConfig, null, 2));
+        console.log('✅ Enabled Edge-to-Edge status bar insets in capacitor.config.json');
+      }
+    } catch (e) {
+      console.warn('⚠️ Could not update capacitor.config.json for edge-to-edge support.');
+    }
+  }
+
+  if (installed) {
+    console.log('\n📦 Installing edge-to-edge status bar support...');
+    try {
+      execSync('npm install', { stdio: 'inherit' });
+    } catch (e) {
+      console.warn('⚠️ Could not install the edge-to-edge plugin. Run "npm install" manually.');
+    }
+  }
+}
+
 // Generate native app icons & splash screens from assets/icon.png
 function generateAppAssets(platform) {
   if (!fs.existsSync(path.join(process.cwd(), platform))) return;
@@ -188,6 +239,9 @@ function prepareCapacitorConfig() {
   // 1. Dependencies
   pkg.dependencies = pkg.dependencies || {};
   pkg.dependencies['@capacitor/core'] = '^8.5.1';
+  // Physically insets the web view on Android 15+ edge-to-edge displays,
+  // so app content never renders behind the status / navigation bars.
+  pkg.dependencies['@capawesome/capacitor-android-edge-to-edge-support'] = '^8.0.8';
 
   pkg.devDependencies = pkg.devDependencies || {};
   pkg.devDependencies['@capacitor/cli'] = '^8.5.1';
@@ -233,11 +287,20 @@ function prepareCapacitorConfig() {
     plugins: {
       CapacitorHttp: {
         enabled: true
+      },
+      // Status bar / navigation bar background. Change these to match your app theme.
+      EdgeToEdge: {
+        backgroundColor: "#ffffff"
+      },
+      // Required by the edge-to-edge plugin: turn off Capacitor's own CSS-variable
+      // inset injection so the two do not apply the safe area twice.
+      SystemBars: {
+        insetsHandling: "disable"
       }
     }
   };
   fs.writeFileSync('capacitor.config.json', JSON.stringify(capConfig, null, 2));
-  console.log(`✅ Created capacitor.config.json with Native HTTP enabled`);
+  console.log(`✅ Created capacitor.config.json with Native HTTP and Edge-to-Edge insets enabled`);
 
   // 4. Install dependencies & build web package
   console.log('\n📦 Installing NPM packages...');
@@ -278,6 +341,7 @@ function setupAndroid() {
   }
 
   ensureAndroidSdkLocation();
+  ensureEdgeToEdgeSupport();
   generateAppAssets('android');
 
   console.log('\n🔄 Syncing web assets into Android...');
@@ -356,6 +420,7 @@ function handleReset() {
 
     if (pkg.dependencies) {
       delete pkg.dependencies['@capacitor/core'];
+      delete pkg.dependencies['@capawesome/capacitor-android-edge-to-edge-support'];
       delete pkg.dependencies['@capacitor/push-notifications'];
     }
     if (pkg.devDependencies) {
