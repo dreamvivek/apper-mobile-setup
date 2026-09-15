@@ -95,141 +95,80 @@ function ensureAndroidPermissions() {
   }
 }
 
-// Inject zero-config Push Notification Listener & FCM Token Sync into entry HTML
-function injectPushListener() {
-  const possibleHtmlPaths = [
+// Remove artifacts left behind by the previous push-notification implementation
+function cleanupLegacyPushArtifacts() {
+  const marker = '<!-- APPER_PUSH_LISTENER_INJECTED -->';
+  const htmlPaths = [
     path.join(process.cwd(), 'index.html'),
     path.join(process.cwd(), 'public', 'index.html')
   ];
 
-  const htmlPath = possibleHtmlPaths.find(p => fs.existsSync(p));
-  if (!htmlPath) return;
+  for (const htmlPath of htmlPaths) {
+    if (!fs.existsSync(htmlPath)) continue;
 
-  let htmlContent = fs.readFileSync(htmlPath, 'utf-8');
-  const injectionMarker = '<!-- APPER_PUSH_LISTENER_INJECTED -->';
+    const content = fs.readFileSync(htmlPath, 'utf-8');
+    if (!content.includes(marker)) continue;
 
-  if (htmlContent.includes(injectionMarker)) return;
+    // Strip from the marker through the end of its <script> block, plus trailing blank lines
+    const cleaned = content
+      .replace(/[ \t]*<!-- APPER_PUSH_LISTENER_INJECTED -->[\s\S]*?<\/script>[ \t]*\r?\n?/, '')
+      .replace(/\n{3,}/g, '\n\n');
 
-  const pushScript = `
-    ${injectionMarker}
-    <script type="module">
-      import apper from 'https://cdn.apper.io/actions/apper-actions.js';
-
-      (function() {
-        if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.PushNotifications) {
-          const Push = window.Capacitor.Plugins.PushNotifications;
-          
-          // 1. Request Push Permissions on App Launch
-          Push.requestPermissions().then(function(result) {
-            if (result.receive === 'granted') {
-              Push.register();
-            }
-          });
-
-          // 2. On FCM Registration: Store token & upload to Apper User Profile
-          Push.addListener('registration', async function(token) {
-            window.ApperDeviceToken = token.value;
-
-            try {
-              // Retrieve active user email or ID from Apper SDK or local storage
-              const currentUser = await apper.getUser();
-              if (currentUser && currentUser.email) {
-                await apper.updateUser({
-                  email: currentUser.email,
-                  fcmToken: token.value
-                });
-                console.log('✅ FCM token synced with Apper user profile');
-              }
-            } catch (err) {
-              console.warn('⚠️ Could not auto-sync FCM token to Apper:', err.message);
-            }
-          });
-
-          // 3. Handle Notification Tap (Deep Linking to specific records/pages)
-          Push.addListener('pushNotificationActionPerformed', function(action) {
-            var data = action.notification.data;
-            if (data && data.url) {
-              window.location.href = data.url;
-            }
-            window.dispatchEvent(new CustomEvent('apperNotificationTap', { detail: data }));
-          });
-        }
-      })();
-    </script>
-  `;
-
-  if (htmlContent.includes('</head>')) {
-    htmlContent = htmlContent.replace('</head>', `${pushScript}\n</head>`);
-    fs.writeFileSync(htmlPath, htmlContent);
-    console.log(`✅ Injected FCM token auto-sync listener into ${path.relative(process.cwd(), htmlPath)}`);
-  }
-}
-
-// Configure FCM for Android using notifications/google-services.json
-function configureAndroidPushNotifications() {
-  const possiblePaths = [
-    path.join(process.cwd(), 'notifications', 'google-services.json'),
-    path.join(process.cwd(), 'google-services.json')
-  ];
-
-  const sourcePath = possiblePaths.find(p => fs.existsSync(p));
-
-  if (!sourcePath) {
-    console.log('\n💡 Tip: Place google-services.json in a "notifications/" folder at project root to auto-enable Android Push Notifications.');
-    return;
+    fs.writeFileSync(htmlPath, cleaned);
+    console.log(`🧹 Removed injected push listener script from ${path.relative(process.cwd(), htmlPath)}`);
   }
 
-  const targetPath = path.join(process.cwd(), 'android', 'app', 'google-services.json');
-  fs.copyFileSync(sourcePath, targetPath);
-  console.log(`✅ Copied google-services.json from ${path.relative(process.cwd(), sourcePath)} to android/app/`);
-
-  // Inject Google Services plugin into build.gradle files safely
-  const rootGradlePath = path.join(process.cwd(), 'android', 'build.gradle');
-  if (fs.existsSync(rootGradlePath)) {
-    let content = fs.readFileSync(rootGradlePath, 'utf-8');
-    if (!content.includes('com.google.gms:google-services')) {
-      content = content.replace(
-        /dependencies\s*\{/,
-        "dependencies {\n        classpath 'com.google.gms:google-services:4.4.0'"
-      );
-      fs.writeFileSync(rootGradlePath, content);
-      console.log('✅ Added google-services dependency to android/build.gradle');
+  const pkgPath = path.join(process.cwd(), 'package.json');
+  if (fs.existsSync(pkgPath)) {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+    if (pkg.dependencies && pkg.dependencies['@capacitor/push-notifications']) {
+      delete pkg.dependencies['@capacitor/push-notifications'];
+      fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2));
+      console.log('🧹 Removed @capacitor/push-notifications from package.json');
     }
   }
 
-  const appGradlePath = path.join(process.cwd(), 'android', 'app', 'build.gradle');
-  if (fs.existsSync(appGradlePath)) {
-    let content = fs.readFileSync(appGradlePath, 'utf-8');
-    if (!content.includes('com.google.gms.google-services')) {
-      content += "\napply plugin: 'com.google.gms.google-services'\n";
-      fs.writeFileSync(appGradlePath, content);
-      console.log('✅ Applied google-services plugin in android/app/build.gradle');
+  const capConfigPath = path.join(process.cwd(), 'capacitor.config.json');
+  if (fs.existsSync(capConfigPath)) {
+    try {
+      const capConfig = JSON.parse(fs.readFileSync(capConfigPath, 'utf-8'));
+      if (capConfig.plugins && capConfig.plugins.PushNotifications) {
+        delete capConfig.plugins.PushNotifications;
+        fs.writeFileSync(capConfigPath, JSON.stringify(capConfig, null, 2));
+        console.log('🧹 Removed PushNotifications config from capacitor.config.json');
+      }
+    } catch (e) {
+      console.warn('⚠️ Could not parse capacitor.config.json while cleaning up.');
     }
   }
 }
 
-// Configure APNs/FCM for iOS using notifications/GoogleService-Info.plist
-function configureIOSPushNotifications() {
-  const possiblePaths = [
-    path.join(process.cwd(), 'notifications', 'GoogleService-Info.plist'),
-    path.join(process.cwd(), 'GoogleService-Info.plist')
-  ];
+// Generate native app icons & splash screens from assets/icon.png
+function generateAppAssets(platform) {
+  if (!fs.existsSync(path.join(process.cwd(), platform))) return;
 
-  const sourcePath = possiblePaths.find(p => fs.existsSync(p));
+  const assetsDir = path.join(process.cwd(), 'assets');
+  const iconPath = path.join(assetsDir, 'icon.png');
 
-  if (!sourcePath) {
-    console.log('\n💡 Tip: Place GoogleService-Info.plist in a "notifications/" folder at project root to auto-enable iOS Push Notifications.');
+  if (!fs.existsSync(iconPath)) {
+    console.log('\n💡 Tip: Add "assets/icon.png" (1024x1024) to auto-generate your app icon.');
     return;
   }
 
-  const targetDir = path.join(process.cwd(), 'ios', 'App', 'App');
-  if (fs.existsSync(targetDir)) {
-    fs.copyFileSync(sourcePath, path.join(targetDir, 'GoogleService-Info.plist'));
-    console.log(`✅ Copied GoogleService-Info.plist from ${path.relative(process.cwd(), sourcePath)} to ios/App/App/`);
+  if (!fs.existsSync(path.join(assetsDir, 'splash.png'))) {
+    console.log('💡 Tip: Add "assets/splash.png" (2732x2732) to also generate splash screens.');
+  }
+
+  console.log(`\n🎨 Generating app icons & splash screens for ${platform}...`);
+  try {
+    execSync(`npx @capacitor/assets generate --${platform}`, { stdio: 'inherit' });
+    console.log('✅ App assets generated!');
+  } catch (e) {
+    console.warn('⚠️ Could not generate app assets. Verify assets/icon.png is a valid 1024x1024 PNG.');
   }
 }
 
-// Shared Core Configuration setup
+// Shared Core Configuration setup (without touching source code)
 function prepareCapacitorConfig() {
   console.log('\n⚙️ Configuring Capacitor dependencies...');
 
@@ -239,23 +178,27 @@ function prepareCapacitorConfig() {
     return false;
   }
 
+  cleanupLegacyPushArtifacts();
+
   const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
   const rawName = pkg.name || 'mobile-app';
   const appName = formatAppName(rawName);
   const appId = formatAppId(rawName);
 
+  // 1. Dependencies
   pkg.dependencies = pkg.dependencies || {};
   pkg.dependencies['@capacitor/core'] = '^8.5.1';
-  pkg.dependencies['@capacitor/push-notifications'] = '^8.0.0';
 
   pkg.devDependencies = pkg.devDependencies || {};
   pkg.devDependencies['@capacitor/cli'] = '^8.5.1';
   pkg.devDependencies['@capacitor/android'] = '^8.5.1';
   pkg.devDependencies['@capacitor/ios'] = '^8.5.1';
+  pkg.devDependencies['@capacitor/assets'] = '^3.0.5';
 
   fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2));
   console.log(`✅ Updated package.json (App Name: "${appName}", App ID: "${appId}")`);
 
+  // 2. .gitignore updates
   const gitignorePath = path.join(process.cwd(), '.gitignore');
   const nativeEntries = ['/android', '/ios', 'capacitor.config.json'];
 
@@ -274,6 +217,7 @@ function prepareCapacitorConfig() {
     console.log(`✅ Updated .gitignore`);
   }
 
+  // 3. Create capacitor.config.json with Native HTTP enabled
   let webDir = 'dist';
   if (fs.existsSync('build')) webDir = 'build';
   else if (fs.existsSync('out')) webDir = 'out';
@@ -289,18 +233,13 @@ function prepareCapacitorConfig() {
     plugins: {
       CapacitorHttp: {
         enabled: true
-      },
-      PushNotifications: {
-        presentationOptions: ["badge", "sound", "alert"]
       }
     }
   };
   fs.writeFileSync('capacitor.config.json', JSON.stringify(capConfig, null, 2));
-  console.log(`✅ Created capacitor.config.json with Native HTTP and Push Notifications enabled`);
+  console.log(`✅ Created capacitor.config.json with Native HTTP enabled`);
 
-  // Inject script prior to build step
-  injectPushListener();
-
+  // 4. Install dependencies & build web package
   console.log('\n📦 Installing NPM packages...');
   try {
     execSync('npm install', { stdio: 'inherit' });
@@ -339,8 +278,8 @@ function setupAndroid() {
   }
 
   ensureAndroidSdkLocation();
-  configureAndroidPushNotifications();
-  
+  generateAppAssets('android');
+
   console.log('\n🔄 Syncing web assets into Android...');
   try {
     execSync('npx cap sync android', { stdio: 'inherit' });
@@ -376,7 +315,7 @@ function setupIOS() {
     }
   }
 
-  configureIOSPushNotifications();
+  generateAppAssets('ios');
 
   console.log('\n🔄 Syncing web assets into iOS...');
   try {
@@ -399,6 +338,8 @@ function setupIOS() {
 function handleReset() {
   console.log('\n🧹 Clearing all generated mobile configurations and platforms...');
 
+  cleanupLegacyPushArtifacts();
+
   const targets = ['android', 'ios', 'capacitor.config.json'];
   targets.forEach(item => {
     const itemPath = path.join(process.cwd(), item);
@@ -408,10 +349,11 @@ function handleReset() {
     }
   });
 
+  // Revert package.json dependency injections
   const pkgPath = path.join(process.cwd(), 'package.json');
   if (fs.existsSync(pkgPath)) {
     const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
-    
+
     if (pkg.dependencies) {
       delete pkg.dependencies['@capacitor/core'];
       delete pkg.dependencies['@capacitor/push-notifications'];
@@ -420,13 +362,15 @@ function handleReset() {
       delete pkg.devDependencies['@capacitor/cli'];
       delete pkg.devDependencies['@capacitor/android'];
       delete pkg.devDependencies['@capacitor/ios'];
+      delete pkg.devDependencies['@capacitor/assets'];
     }
-    
+
     fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2));
     console.log('  🗑️ Removed Capacitor entries from package.json');
   }
 
   console.log('\n✨ Reset complete! Mobile configurations have been removed.');
+  console.log('   (Your "assets/" folder was left untouched.)');
 }
 
 // Interactive CLI Loop
@@ -472,6 +416,10 @@ async function main() {
   console.log('⚠️  REQUIRED SOFTWARE & DOWNLOAD LINKS:');
   console.log('  • Android Studio & JDK: https://developer.android.com/studio');
   console.log('  • Xcode (macOS only):   https://developer.apple.com/xcode/\n');
+
+  console.log('🎨 APP ICON & SPLASH (optional):');
+  console.log('  • assets/icon.png   (1024x1024) → app icon');
+  console.log('  • assets/splash.png (2732x2732) → splash screen\n');
 
   await showMenu();
 }
